@@ -36,6 +36,9 @@ kind create cluster --name kind-multi-node --config kind-config.yaml
 Write-Host "Installing Calico CNI..." -ForegroundColor Cyan
 & kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
 
+Write-Host "Pre-installing Prometheus ServiceMonitor CRD..." -ForegroundColor Cyan
+& kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml
+
 Write-Host "Waiting for Calico CNI to initialize..." -ForegroundColor Yellow
 Start-Sleep -Seconds 15
 
