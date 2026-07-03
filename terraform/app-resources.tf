@@ -752,9 +752,5 @@ resource "kubernetes_manifest" "payments_monitor" {
   }
 }
 
-variable "image_tag" {
-  description = "Immutable Docker image tag (short git SHA) for all microservices"
-  type        = string
-}
 
 

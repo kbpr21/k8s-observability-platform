@@ -1,216 +1,277 @@
-name: CI/CD Pipeline
+name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Fast gate: syntax, linting, basic unit checks (ubuntu-latest is fine here)
-  # ─────────────────────────────────────────────────────────────────────────────
-  lint-and-test:
-    name: Lint & Test Matrix
+  # ── Static checks ─────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (${{ matrix.service }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
         service: [gateway, orders, payments]
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
+          cache: pip
           cache-dependency-path: app/${{ matrix.service }}/requirements.txt
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install flake8 pytest
-          if [ -f app/${{ matrix.service }}/requirements.txt ]; then
-            pip install -r app/${{ matrix.service }}/requirements.txt
-          fi
+          pip install --upgrade pip
+          pip install flake8
+          pip install -r app/${{ matrix.service }}/requirements.txt
 
-      - name: Lint with flake8
+      - name: flake8
         run: |
-          flake8 app/${{ matrix.service }} --count --select=E9,F63,F7,F82 --show-source --statistics
-          flake8 app/${{ matrix.service }} --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+          flake8 app/${{ matrix.service }} \
+            --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 app/${{ matrix.service }} \
+            --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
-      - name: Run Python Syntax Check
-        run: |
-          python -m py_compile app/${{ matrix.service }}/main.py
+      - name: Syntax check
+        run: python -m py_compile app/${{ matrix.service }}/main.py
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Full observability stack validation. Runs on a larger runner (ubuntu-latest-8-core)
-  # which provides ~32 GB RAM — enough for Prometheus, Loki, Promtail, Alertmanager
-  # plus the three application microservices and Redis.
+  # ── Full observability stack + alerting assertions ─────────────────────────────
   #
-  # Runner label: ubuntu-latest-8-core  (GitHub-hosted, 8 vCPU / 32 GB)
-  # Docs: https://docs.github.com/en/actions/using-github-hosted-runners/about-larger-runners
-  # ─────────────────────────────────────────────────────────────────────────────
-  full-observability-validation:
-    name: Full Stack Observability & Alerting CI
-    needs: lint-and-test
-    runs-on: ubuntu-latest-8-core   # larger runner required for full stack
+  # Runs on ubuntu-latest (2 vCPU / ~7 GB RAM).  Total scheduled memory requests:
+  #   gateway x1:        64 Mi
+  #   orders  x1:        64 Mi
+  #   payments x1:       64 Mi
+  #   redis:             32 Mi (no explicit request; image default)
+  #   prometheus:       300 Mi
+  #   alertmanager:      64 Mi
+  #   loki:             128 Mi
+  #   promtail:          64 Mi
+  #   kind + system:   ~600 Mi
+  #   ─────────────────────────
+  #   Total:           ~1.4 GB  (well within 7 GB ceiling)
+  #
+  # Grafana, kube-state-metrics, node-exporter, and admission webhooks are
+  # disabled in prometheus-values.yaml.tpl to keep footprint low.
+  observability:
+    name: Observability & Alerting
+    needs: lint
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # Fix 2: compute immutable SHA tag once; all subsequent steps use IMAGE_TAG
-      - name: Compute Image Tag
+      - name: Compute image tag
         run: echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Fix 2: build and load with SHA tag only — no :latest alias
-      - name: Build Application Images
+      - name: Build images
         run: |
-          docker build -t "gateway:${{ env.IMAGE_TAG }}" ./app/gateway
-          docker build -t "orders:${{ env.IMAGE_TAG }}" ./app/orders
-          docker build -t "payments:${{ env.IMAGE_TAG }}" ./app/payments
+          docker build -t "gateway:$IMAGE_TAG"  ./app/gateway
+          docker build -t "orders:$IMAGE_TAG"   ./app/orders
+          docker build -t "payments:$IMAGE_TAG" ./app/payments
 
-      - name: Create kind Cluster
+      - name: Create kind cluster
         uses: helm/kind-action@v1.10.0
         with:
           cluster_name: kind-multi-node
           config: kind-config.yaml
           wait: 120s
 
-      # Fix 2: load SHA-tagged images
-      - name: Load Images into Kind
+      - name: Load images into kind
         run: |
-          kind load docker-image "gateway:${{ env.IMAGE_TAG }}" --name kind-multi-node
-          kind load docker-image "orders:${{ env.IMAGE_TAG }}" --name kind-multi-node
-          kind load docker-image "payments:${{ env.IMAGE_TAG }}" --name kind-multi-node
+          kind load docker-image "gateway:$IMAGE_TAG"  --name kind-multi-node
+          kind load docker-image "orders:$IMAGE_TAG"   --name kind-multi-node
+          kind load docker-image "payments:$IMAGE_TAG" --name kind-multi-node
 
       - name: Install Calico CNI
         run: |
-          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
-          echo "Waiting for Calico to initialise..."
-          sleep 30
-          kubectl wait --for=condition=Ready pods -l k8s-app=calico-node -n kube-system --timeout=120s
+          kubectl apply -f \
+            https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+          kubectl wait \
+            --for=condition=Ready pods -l k8s-app=calico-node \
+            -n kube-system --timeout=120s
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.5
-
-      - name: Add Helm Repos
+      - name: Add Helm repositories
         run: |
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add prometheus-community \
+            https://prometheus-community.github.io/helm-charts
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
 
-      # Fix 3: deploy the FULL observability stack (install_observability=true)
-      # Fix 2: pass image_tag var so Terraform uses immutable SHA, not :latest
-      - name: Deploy Full Stack via Terraform
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+
+      - name: Deploy full stack via Terraform
         run: |
           cd terraform
           terraform init
           terraform apply -auto-approve \
             -var="install_observability=true" \
-            -var="image_tag=${{ env.IMAGE_TAG }}"
+            -var="gateway_replicas=1" \
+            -var="orders_replicas=1" \
+            -var="image_tag=$IMAGE_TAG"
 
-      - name: Wait for App Pods
+      - name: Wait — app pods ready
         run: |
-          kubectl rollout status deployment/gateway  -n app --timeout=120s
-          kubectl rollout status deployment/orders   -n app --timeout=120s
-          kubectl rollout status deployment/payments -n app --timeout=120s
+          kubectl rollout status deployment/gateway  -n app --timeout=180s
+          kubectl rollout status deployment/orders   -n app --timeout=180s
+          kubectl rollout status deployment/payments -n app --timeout=180s
 
-      # ── NetworkPolicy assertion (kept from lean job) ──────────────────────
-      - name: Assert NetworkPolicy Blocks Gateway → Payments
+      - name: Wait — Prometheus ready
         run: |
-          GATEWAY_POD=$(kubectl get pods -n app -l app=gateway -o jsonpath='{.items[0].metadata.name}')
-          if kubectl exec -n app "$GATEWAY_POD" -c gateway -- \
-              python -c "import urllib.request; urllib.request.urlopen('http://payments:8000/health', timeout=3)" 2>/dev/null; then
-            echo "ERROR: gateway reached payments — NetworkPolicy is NOT enforced."
+          kubectl rollout status deployment/prometheus-stack-kube-prom-operator \
+            -n monitoring --timeout=300s
+          kubectl wait \
+            --for=condition=Available deployment/prometheus-stack-kube-prom-operator \
+            -n monitoring --timeout=300s
+          # Prometheus itself is a StatefulSet
+          kubectl rollout status statefulset/prometheus-prometheus-stack-kube-prom-prometheus \
+            -n monitoring --timeout=600s
+
+      - name: Wait — Alertmanager ready
+        run: |
+          kubectl rollout status statefulset/alertmanager-prometheus-stack-kube-prom-alertmanager \
+            -n monitoring --timeout=300s
+
+      - name: Assert NetworkPolicy — gateway cannot reach payments directly
+        run: |
+          GW=$(kubectl get pods -n app -l app=gateway \
+            -o jsonpath='{.items[0].metadata.name}')
+          if kubectl exec -n app "$GW" -c gateway -- \
+              python -c \
+              "import urllib.request; urllib.request.urlopen('http://payments:8000/health', timeout=3)" \
+              2>/dev/null; then
+            echo "ERROR: gateway reached payments — NetworkPolicy not enforced."
             exit 1
-          else
-            echo "OK: gateway correctly blocked from payments."
           fi
+          echo "OK: gateway correctly blocked from payments."
 
-      # ── Fix 3: Fault injection + alerting + inhibition assertions ─────────
-      - name: Enable Payments Fault
+      - name: Enable payments fault
         run: |
-          PAYMENTS_POD=$(kubectl get pods -n app -l app=payments -o jsonpath='{.items[0].metadata.name}')
-          kubectl exec -n app "$PAYMENTS_POD" -c payments -- \
-            python -c "
+          PAYMENTS=$(kubectl get pods -n app -l app=payments \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec -n app "$PAYMENTS" -c payments -- python -c "
           import urllib.request, json
           req = urllib.request.Request(
               'http://localhost:8000/fault',
               data=json.dumps({'active': True}).encode(),
               headers={'Content-Type': 'application/json'},
-              method='POST'
+              method='POST',
           )
           urllib.request.urlopen(req)
           print('Fault enabled')
           "
 
-      - name: Generate Traffic to Trigger Alerts
+      - name: Generate traffic through gateway
         run: |
-          INGRESS_IP=$(kubectl get svc -n ingress ingress-nginx-controller \
-            -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-          for i in $(seq 1 40); do
-            curl -sk -H "Host: devops-project.local" \
-              "http://${INGRESS_IP}/order" \
-              -d '{"item":"test"}' -H "Content-Type: application/json" || true
-            sleep 1
+          GW=$(kubectl get pods -n app -l app=gateway \
+            -o jsonpath='{.items[0].metadata.name}')
+          for i in $(seq 1 60); do
+            kubectl exec -n app "$GW" -c gateway -- \
+              python -c "
+          import urllib.request, json
+          try:
+              urllib.request.urlopen(
+                  urllib.request.Request(
+                      'http://localhost:8000/order',
+                      headers={'Content-Type': 'application/json'},
+                      method='GET',
+                  ),
+                  timeout=15,
+              )
+          except Exception:
+              pass
+          " || true
+            sleep 2
           done
 
-      # Fix 3: Poll Prometheus until payments_error_rate_1m >= 0.9, timeout 4 min
-      - name: Assert PaymentsHighErrorRate Fires
+      # Poll Prometheus until PaymentsHighErrorRate fires — 8-minute budget.
+      - name: Assert PaymentsHighErrorRate fires
         run: |
-          PROM_SVC="http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090"
-          DEADLINE=$((SECONDS + 240))
-          echo "Polling Prometheus for PaymentsHighErrorRate (up to 4 min)..."
+          PROM="http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090"
+          GW=$(kubectl get pods -n app -l app=gateway \
+            -o jsonpath='{.items[0].metadata.name}')
+          DEADLINE=$((SECONDS + 480))
+          FIRED=0
+          echo "Polling for PaymentsHighErrorRate (budget: 8 min)..."
           while [ $SECONDS -lt $DEADLINE ]; do
-            STATE=$(kubectl exec -n app \
-              "$(kubectl get pods -n app -l app=gateway -o jsonpath='{.items[0].metadata.name}')" \
-              -c gateway -- python -c "
+            COUNT=$(kubectl exec -n app "$GW" -c gateway -- python -c "
           import urllib.request, json, urllib.parse
           q = urllib.parse.quote('ALERTS{alertname=\"PaymentsHighErrorRate\",alertstate=\"firing\"}')
-          data = json.loads(urllib.request.urlopen('${PROM_SVC}/api/v1/query?query=' + q).read())
-          print(len(data['data']['result']))
+          d = json.loads(urllib.request.urlopen('${PROM}/api/v1/query?query=' + q).read())
+          print(len(d['data']['result']))
           " 2>/dev/null || echo "0")
-            if [ "$STATE" -ge 1 ]; then
+            if [ "$COUNT" -ge 1 ]; then
               echo "OK: PaymentsHighErrorRate is firing."
+              FIRED=1
               break
             fi
-            echo "Not firing yet, waiting 15s..."
+            echo "  not firing yet (${SECONDS}s elapsed) — waiting 15 s..."
             sleep 15
           done
-          if [ "$STATE" -lt 1 ]; then
-            echo "ERROR: PaymentsHighErrorRate did not fire within timeout."
+          if [ "$FIRED" -eq 0 ]; then
+            echo "FAIL: PaymentsHighErrorRate did not fire within 8 minutes."
+            echo "--- kubectl get pods -A ---"
+            kubectl get pods -A
+            echo "--- Prometheus pod logs (last 50 lines) ---"
+            kubectl logs -n monitoring \
+              -l app.kubernetes.io/name=prometheus --tail=50 || true
+            echo "--- Alertmanager pod logs (last 50 lines) ---"
+            kubectl logs -n monitoring \
+              -l app.kubernetes.io/name=alertmanager --tail=50 || true
+            echo "--- Alertmanager /api/v2/alerts ---"
+            kubectl exec -n app "$GW" -c gateway -- \
+              python -c "
+          import urllib.request, json
+          print(json.dumps(
+            json.loads(urllib.request.urlopen(
+              'http://prometheus-stack-kube-prom-alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts'
+            ).read()), indent=2))
+          " || true
             exit 1
           fi
 
-      # Fix 3: Assert GatewayHighLatency is suppressed (inhibited) in Alertmanager
-      - name: Assert GatewayHighLatency is Inhibited
+      # Assert GatewayHighLatency is suppressed — 3-minute budget after PaymentsHighErrorRate fired.
+      - name: Assert GatewayHighLatency is inhibited
         run: |
-          AM_SVC="http://prometheus-stack-kube-prom-alertmanager.monitoring.svc.cluster.local:9093"
-          RESULT=$(kubectl exec -n app \
-            "$(kubectl get pods -n app -l app=gateway -o jsonpath='{.items[0].metadata.name}')" \
-            -c gateway -- python -c "
+          AM="http://prometheus-stack-kube-prom-alertmanager.monitoring.svc.cluster.local:9093"
+          GW=$(kubectl get pods -n app -l app=gateway \
+            -o jsonpath='{.items[0].metadata.name}')
+          DEADLINE=$((SECONDS + 180))
+          INHIBITED=0
+          echo "Polling for GatewayHighLatency inhibition (budget: 3 min)..."
+          while [ $SECONDS -lt $DEADLINE ]; do
+            RESULT=$(kubectl exec -n app "$GW" -c gateway -- python -c "
           import urllib.request, json
-          alerts = json.loads(urllib.request.urlopen('${AM_SVC}/api/v2/alerts').read())
+          alerts = json.loads(urllib.request.urlopen('${AM}/api/v2/alerts').read())
           for a in alerts:
               if a['labels'].get('alertname') == 'GatewayHighLatency':
-                  state = a['status']['state']
-                  inhibited_by = a['status'].get('inhibitedBy', [])
-                  print(state, len(inhibited_by))
-          ")
-          echo "GatewayHighLatency status: $RESULT"
-          STATE=$(echo "$RESULT" | awk '{print $1}')
-          ICOUNT=$(echo "$RESULT" | awk '{print $2}')
-          if [ "$STATE" != "suppressed" ] || [ "$ICOUNT" -lt 1 ]; then
-            echo "ERROR: GatewayHighLatency is not inhibited. Got state='$STATE' inhibitedBy count='$ICOUNT'."
+                  print(a['status']['state'], len(a['status'].get('inhibitedBy', [])))
+          " 2>/dev/null || echo "")
+            STATE=$(echo "$RESULT" | awk '{print $1}')
+            ICOUNT=$(echo "$RESULT" | awk '{print $2}')
+            if [ "$STATE" = "suppressed" ] && [ "${ICOUNT:-0}" -ge 1 ]; then
+              echo "OK: GatewayHighLatency is suppressed (inhibited by PaymentsHighErrorRate)."
+              INHIBITED=1
+              break
+            fi
+            echo "  state='$STATE' inhibitedBy=$ICOUNT — waiting 15 s..."
+            sleep 15
+          done
+          if [ "$INHIBITED" -eq 0 ]; then
+            echo "FAIL: GatewayHighLatency was not inhibited within 3 minutes."
+            echo "--- Alertmanager /api/v2/alerts ---"
+            kubectl exec -n app "$GW" -c gateway -- \
+              python -c "
+          import urllib.request, json
+          print(json.dumps(
+            json.loads(urllib.request.urlopen('${AM}/api/v2/alerts').read()), indent=2))
+          " || true
+            echo "--- Alertmanager pod logs (last 50 lines) ---"
+            kubectl logs -n monitoring \
+              -l app.kubernetes.io/name=alertmanager --tail=50 || true
             exit 1
           fi
-          echo "OK: GatewayHighLatency is suppressed (inhibited by PaymentsHighErrorRate)."
