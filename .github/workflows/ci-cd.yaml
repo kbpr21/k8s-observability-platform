@@ -1,0 +1,216 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Fast gate: syntax, linting, basic unit checks (ubuntu-latest is fine here)
+  # ─────────────────────────────────────────────────────────────────────────────
+  lint-and-test:
+    name: Lint & Test Matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [gateway, orders, payments]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: app/${{ matrix.service }}/requirements.txt
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pytest
+          if [ -f app/${{ matrix.service }}/requirements.txt ]; then
+            pip install -r app/${{ matrix.service }}/requirements.txt
+          fi
+
+      - name: Lint with flake8
+        run: |
+          flake8 app/${{ matrix.service }} --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 app/${{ matrix.service }} --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Run Python Syntax Check
+        run: |
+          python -m py_compile app/${{ matrix.service }}/main.py
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Full observability stack validation. Runs on a larger runner (ubuntu-latest-8-core)
+  # which provides ~32 GB RAM — enough for Prometheus, Loki, Promtail, Alertmanager
+  # plus the three application microservices and Redis.
+  #
+  # Runner label: ubuntu-latest-8-core  (GitHub-hosted, 8 vCPU / 32 GB)
+  # Docs: https://docs.github.com/en/actions/using-github-hosted-runners/about-larger-runners
+  # ─────────────────────────────────────────────────────────────────────────────
+  full-observability-validation:
+    name: Full Stack Observability & Alerting CI
+    needs: lint-and-test
+    runs-on: ubuntu-latest-8-core   # larger runner required for full stack
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Fix 2: compute immutable SHA tag once; all subsequent steps use IMAGE_TAG
+      - name: Compute Image Tag
+        run: echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Fix 2: build and load with SHA tag only — no :latest alias
+      - name: Build Application Images
+        run: |
+          docker build -t "gateway:${{ env.IMAGE_TAG }}" ./app/gateway
+          docker build -t "orders:${{ env.IMAGE_TAG }}" ./app/orders
+          docker build -t "payments:${{ env.IMAGE_TAG }}" ./app/payments
+
+      - name: Create kind Cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: kind-multi-node
+          config: kind-config.yaml
+          wait: 120s
+
+      # Fix 2: load SHA-tagged images
+      - name: Load Images into Kind
+        run: |
+          kind load docker-image "gateway:${{ env.IMAGE_TAG }}" --name kind-multi-node
+          kind load docker-image "orders:${{ env.IMAGE_TAG }}" --name kind-multi-node
+          kind load docker-image "payments:${{ env.IMAGE_TAG }}" --name kind-multi-node
+
+      - name: Install Calico CNI
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+          echo "Waiting for Calico to initialise..."
+          sleep 30
+          kubectl wait --for=condition=Ready pods -l k8s-app=calico-node -n kube-system --timeout=120s
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+
+      - name: Add Helm Repos
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
+
+      # Fix 3: deploy the FULL observability stack (install_observability=true)
+      # Fix 2: pass image_tag var so Terraform uses immutable SHA, not :latest
+      - name: Deploy Full Stack via Terraform
+        run: |
+          cd terraform
+          terraform init
+          terraform apply -auto-approve \
+            -var="install_observability=true" \
+            -var="image_tag=${{ env.IMAGE_TAG }}"
+
+      - name: Wait for App Pods
+        run: |
+          kubectl rollout status deployment/gateway  -n app --timeout=120s
+          kubectl rollout status deployment/orders   -n app --timeout=120s
+          kubectl rollout status deployment/payments -n app --timeout=120s
+
+      # ── NetworkPolicy assertion (kept from lean job) ──────────────────────
+      - name: Assert NetworkPolicy Blocks Gateway → Payments
+        run: |
+          GATEWAY_POD=$(kubectl get pods -n app -l app=gateway -o jsonpath='{.items[0].metadata.name}')
+          if kubectl exec -n app "$GATEWAY_POD" -c gateway -- \
+              python -c "import urllib.request; urllib.request.urlopen('http://payments:8000/health', timeout=3)" 2>/dev/null; then
+            echo "ERROR: gateway reached payments — NetworkPolicy is NOT enforced."
+            exit 1
+          else
+            echo "OK: gateway correctly blocked from payments."
+          fi
+
+      # ── Fix 3: Fault injection + alerting + inhibition assertions ─────────
+      - name: Enable Payments Fault
+        run: |
+          PAYMENTS_POD=$(kubectl get pods -n app -l app=payments -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec -n app "$PAYMENTS_POD" -c payments -- \
+            python -c "
+          import urllib.request, json
+          req = urllib.request.Request(
+              'http://localhost:8000/fault',
+              data=json.dumps({'active': True}).encode(),
+              headers={'Content-Type': 'application/json'},
+              method='POST'
+          )
+          urllib.request.urlopen(req)
+          print('Fault enabled')
+          "
+
+      - name: Generate Traffic to Trigger Alerts
+        run: |
+          INGRESS_IP=$(kubectl get svc -n ingress ingress-nginx-controller \
+            -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          for i in $(seq 1 40); do
+            curl -sk -H "Host: devops-project.local" \
+              "http://${INGRESS_IP}/order" \
+              -d '{"item":"test"}' -H "Content-Type: application/json" || true
+            sleep 1
+          done
+
+      # Fix 3: Poll Prometheus until payments_error_rate_1m >= 0.9, timeout 4 min
+      - name: Assert PaymentsHighErrorRate Fires
+        run: |
+          PROM_SVC="http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090"
+          DEADLINE=$((SECONDS + 240))
+          echo "Polling Prometheus for PaymentsHighErrorRate (up to 4 min)..."
+          while [ $SECONDS -lt $DEADLINE ]; do
+            STATE=$(kubectl exec -n app \
+              "$(kubectl get pods -n app -l app=gateway -o jsonpath='{.items[0].metadata.name}')" \
+              -c gateway -- python -c "
+          import urllib.request, json, urllib.parse
+          q = urllib.parse.quote('ALERTS{alertname=\"PaymentsHighErrorRate\",alertstate=\"firing\"}')
+          data = json.loads(urllib.request.urlopen('${PROM_SVC}/api/v1/query?query=' + q).read())
+          print(len(data['data']['result']))
+          " 2>/dev/null || echo "0")
+            if [ "$STATE" -ge 1 ]; then
+              echo "OK: PaymentsHighErrorRate is firing."
+              break
+            fi
+            echo "Not firing yet, waiting 15s..."
+            sleep 15
+          done
+          if [ "$STATE" -lt 1 ]; then
+            echo "ERROR: PaymentsHighErrorRate did not fire within timeout."
+            exit 1
+          fi
+
+      # Fix 3: Assert GatewayHighLatency is suppressed (inhibited) in Alertmanager
+      - name: Assert GatewayHighLatency is Inhibited
+        run: |
+          AM_SVC="http://prometheus-stack-kube-prom-alertmanager.monitoring.svc.cluster.local:9093"
+          RESULT=$(kubectl exec -n app \
+            "$(kubectl get pods -n app -l app=gateway -o jsonpath='{.items[0].metadata.name}')" \
+            -c gateway -- python -c "
+          import urllib.request, json
+          alerts = json.loads(urllib.request.urlopen('${AM_SVC}/api/v2/alerts').read())
+          for a in alerts:
+              if a['labels'].get('alertname') == 'GatewayHighLatency':
+                  state = a['status']['state']
+                  inhibited_by = a['status'].get('inhibitedBy', [])
+                  print(state, len(inhibited_by))
+          ")
+          echo "GatewayHighLatency status: $RESULT"
+          STATE=$(echo "$RESULT" | awk '{print $1}')
+          ICOUNT=$(echo "$RESULT" | awk '{print $2}')
+          if [ "$STATE" != "suppressed" ] || [ "$ICOUNT" -lt 1 ]; then
+            echo "ERROR: GatewayHighLatency is not inhibited. Got state='$STATE' inhibitedBy count='$ICOUNT'."
+            exit 1
+          fi
+          echo "OK: GatewayHighLatency is suppressed (inhibited by PaymentsHighErrorRate)."

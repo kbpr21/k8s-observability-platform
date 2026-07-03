@@ -1,0 +1,20 @@
+# Normalize line endings to LF in the repository for all text files.
+# Windows checkouts will still get CRLF via core.autocrlf, but the
+# stored blob is always LF — consistent across Linux CI runners and macOS.
+* text=auto eol=lf
+
+# Scripts that must be LF even on Windows (shell, PS1 work fine with LF)
+*.sh   text eol=lf
+*.ps1  text eol=lf
+*.py   text eol=lf
+*.tf   text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.tpl  text eol=lf
+
+# Binaries — never mangle
+*.png  binary
+*.jpg  binary
+*.tar  binary
