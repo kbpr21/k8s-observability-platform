@@ -638,6 +638,8 @@ resource "kubernetes_horizontal_pod_autoscaler_v2" "orders_hpa" {
 resource "kubernetes_manifest" "gateway_monitor" {
   count = var.install_observability ? 1 : 0
 
+  depends_on = [helm_release.prometheus_stack]
+
   manifest = {
     apiVersion = "monitoring.coreos.com/v1"
     kind       = "ServiceMonitor"
@@ -677,6 +679,8 @@ resource "kubernetes_manifest" "gateway_monitor" {
 resource "kubernetes_manifest" "orders_monitor" {
   count = var.install_observability ? 1 : 0
 
+  depends_on = [helm_release.prometheus_stack]
+
   manifest = {
     apiVersion = "monitoring.coreos.com/v1"
     kind       = "ServiceMonitor"
@@ -715,6 +719,8 @@ resource "kubernetes_manifest" "orders_monitor" {
 
 resource "kubernetes_manifest" "payments_monitor" {
   count = var.install_observability ? 1 : 0
+
+  depends_on = [helm_release.prometheus_stack]
 
   manifest = {
     apiVersion = "monitoring.coreos.com/v1"

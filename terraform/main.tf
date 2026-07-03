@@ -62,7 +62,7 @@ resource "helm_release" "prometheus_stack" {
   repository = "https://prometheus-community.github.io/helm-charts"
   chart      = "kube-prometheus-stack"
   namespace  = kubernetes_namespace.monitoring[0].metadata[0].name
-  wait       = false
+  wait       = true
 
   values = [
     templatefile("${path.module}/templates/prometheus-values.yaml.tpl", {
