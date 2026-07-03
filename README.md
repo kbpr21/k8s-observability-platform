@@ -26,10 +26,18 @@ flowchart TD
         Grafana[Grafana Dashboards]
     end
 
-    %% NetworkPolicy Enforcements
-    classDef policy fill:#ff9999,stroke:#333,stroke-width:2px;
-    classDef allow fill:#d4edda,stroke:#28a745,stroke-width:2px;
-    
+    %% Color classes to ensure legibility in both light and dark modes
+    classDef client fill:#e2e3e5,stroke:#383d41,color:#383d41,stroke-width:2px;
+    classDef ingress fill:#fff3cd,stroke:#ffeeba,color:#856404,stroke-width:2px;
+    classDef app fill:#d1ecf1,stroke:#bee5eb,color:#0c5460,stroke-width:2px;
+    classDef monitor fill:#e8dbfc,stroke:#d6bbfd,color:#553c9a,stroke-width:2px;
+    classDef policy fill:#f8d7da,stroke:#f5c6cb,color:#721c24,stroke-width:2px;
+
+    class Client client;
+    class Ingress ingress;
+    class Gateway,Orders,Payments,Redis app;
+    class Prometheus,Promtail,Loki,Grafana monitor;
+
     GatewayNetPol{"gateway-netpol\nAllows ingress from: 'ingress' ns\nAllows ingress from: 'monitoring' ns"}:::policy
     OrdersNetPol{"orders-netpol\nAllows ingress from: 'gateway' pods\nAllows ingress from: 'monitoring' ns"}:::policy
     PaymentsNetPol{"payments-netpol\nAllows ingress ONLY from: 'orders' pods\nAllows ingress from: 'monitoring' ns"}:::policy
@@ -141,3 +149,26 @@ Recover the payments service back to normal:
 powershell -ExecutionPolicy Bypass -File ./scripts/inject-fault.ps1 -Recover
 ```
 The alert will resolve, and subsequent orders will succeed.
+
+---
+
+## Limitations & Production Considerations
+
+> [!NOTE]
+> This repository acts as a local validation, testing, and demonstration platform. It is not designed to be deployed directly to production in its current state.
+
+### Current Sandbox Architecture Limits
+- **Single-Host Kind Cluster**: Runs on a single physical host, offering no physical node redundancy or network partition tolerance.
+- **Single Replicas**: Prometheus, Alertmanager, Loki, and Redis are deployed as single replicas with no high-availability (HA) configuration.
+- **Non-Durable Storage**: Employs local `hostPath` PV/PVC configurations. Data does not persist across cluster deletions.
+- **No PodDisruptionBudgets (PDBs)**: Pods can be evicted concurrently during cluster upgrades, causing service interruption.
+- **Failover / Scheduling**: Multi-node cluster failover and scheduling constraints (node anti-affinity, tolerations) are not actively exercised or validated.
+
+### Requirements for a Production-Grade Deployment
+- **Managed Kubernetes Cluster**: Relocate from local Kind to GKE, EKS, or AKS, spanning multiple Availability Zones (AZs).
+- **High-Availability Prometheus**: Set up Prometheus in an HA agent pair using Thanos, Cortex, or Grafana Mimir to manage global, long-term metric storage and deduplication.
+- **Clustered Alertmanager**: Deploy Alertmanager in clustered mode with mesh networking to prevent single points of failure in alerting paths.
+- **Enterprise Storage for Logs**: Configure Grafana Loki to run in microservices/simple-scalable mode with read/write separation, backed by durable object storage (AWS S3, Google Cloud Storage) instead of local filesystems.
+- **Durable Cache & Store**: Upgrade Redis to an HA cluster/Sentinel configuration with managed lifecycle policies.
+- **Scheduling & Disruption Policies**: Add PodDisruptionBudgets (PDBs) and pod anti-affinity rules to distribute service replicas across nodes and zones.
+- **Simulated Load Testing**: Conduct synthetic traffic load and spike testing to set proper request/limit values, sizing calculations, and actual latency Service Level Objectives (SLOs).
