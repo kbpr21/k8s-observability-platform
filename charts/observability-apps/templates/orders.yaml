@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.orders.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.orders.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.orders.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.orders.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.orders.name }}
+        {{- include "observability-apps.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: {{ .Values.orders.name }}
+          image: "{{ .Values.orders.image }}:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: web
+              containerPort: {{ .Values.orders.port }}
+          env:
+            - name: APP_REDIS_HOST
+              value: {{ .Values.orders.env.APP_REDIS_HOST | quote }}
+            - name: APP_REDIS_PORT
+              value: {{ .Values.orders.env.APP_REDIS_PORT | quote }}
+            - name: PAYMENTS_SERVICE_URL
+              value: {{ .Values.orders.env.PAYMENTS_SERVICE_URL | quote }}
+          resources:
+            {{- toYaml .Values.orders.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.orders.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.orders.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.orders.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.orders.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .Values.orders.name }}
+  ports:
+    - name: web
+      port: {{ .Values.orders.port }}
+      targetPort: {{ .Values.orders.port }}
+{{- if .Values.orders.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: orders-hpa
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.orders.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Values.orders.name }}
+  minReplicas: {{ .Values.orders.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.orders.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.orders.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

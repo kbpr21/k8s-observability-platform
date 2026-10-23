@@ -1,0 +1,73 @@
+{{- if .Values.serviceMonitors.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gateway-monitor
+  namespace: {{ .Values.serviceMonitors.monitoringNamespace }}
+  labels:
+    release: prometheus-stack
+    app: {{ .Values.gateway.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.global.namespace }}
+  selector:
+    matchLabels:
+      app: {{ .Values.gateway.name }}
+  endpoints:
+    - port: web
+      path: /metrics
+      interval: {{ .Values.serviceMonitors.scrapeInterval }}
+      relabelings:
+        - targetLabel: service
+          replacement: {{ .Values.gateway.name }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: orders-monitor
+  namespace: {{ .Values.serviceMonitors.monitoringNamespace }}
+  labels:
+    release: prometheus-stack
+    app: {{ .Values.orders.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.global.namespace }}
+  selector:
+    matchLabels:
+      app: {{ .Values.orders.name }}
+  endpoints:
+    - port: web
+      path: /metrics
+      interval: {{ .Values.serviceMonitors.scrapeInterval }}
+      relabelings:
+        - targetLabel: service
+          replacement: {{ .Values.orders.name }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: payments-monitor
+  namespace: {{ .Values.serviceMonitors.monitoringNamespace }}
+  labels:
+    release: prometheus-stack
+    app: {{ .Values.payments.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.global.namespace }}
+  selector:
+    matchLabels:
+      app: {{ .Values.payments.name }}
+  endpoints:
+    - port: web
+      path: /metrics
+      interval: {{ .Values.serviceMonitors.scrapeInterval }}
+      relabelings:
+        - targetLabel: service
+          replacement: {{ .Values.payments.name }}
+{{- end }}

@@ -66,6 +66,32 @@ flowchart TD
 
 ---
 
+## Visual Verification & Proof of Life
+
+The platform is designed to be fully testable and reproducible. Below is the operational proof across CI execution, metrics dashboards, alert inhibition, and log aggregation:
+
+### 1. End-to-End CI Pipeline Validation (GitHub Actions)
+Every commit triggers an automated end-to-end integration test on an ephemeral Kubernetes (`kind`) runner. The pipeline builds images, provisions Calico CNI, validates packaging schemas, deploys the stack, verifies NetworkPolicy isolation, injects live faults, and asserts Prometheus metric triggers and Alertmanager alert inhibition.
+
+![CI Pipeline Green Validation](docs/screenshots/github-actions-pass.png)
+
+### 2. Metrics & Fault Detection (Grafana)
+Upon toggling `/fault` on the `payments` microservice, 100% of payment transactions fail. Grafana visualizes the real-time surge in 5xx error rates and demonstrates the propagation of a 2.0-second delay upstream to the `gateway` P95 latency (2.24s).
+
+![Grafana Fault Injection Dashboard](docs/screenshots/grafana-fault-spike.png)
+
+### 3. Alertmanager Alert Inhibition (Prometheus Alertmanager)
+When downstream `payments` fails, `PaymentsHighErrorRate` transitions to **FIRING**. To prevent alert storms and downstream noise, Alertmanager's inhibition rule automatically **suppresses** the upstream `GatewayHighLatency` warning alert (`inhibitedBy: [PaymentsHighErrorRate]`).
+
+![Alertmanager Alert Inhibition State](docs/screenshots/alertmanager-inhibition.png)
+
+### 4. Distributed Log Correlation (Grafana Loki)
+Structured JSON logs emitted by all three microservices propagate a unified `X-Request-ID`. Querying Loki by request ID immediately surfaces the causal journey of a failed request from `gateway` to `orders` to `payments`.
+
+![Loki Distributed Trace Correlation](docs/screenshots/loki-trace-correlation.png)
+
+---
+
 ## One-Command Bootstrap
 
 To provision the entire platform (Kind cluster, build and load Docker images, run Terraform, deploy namespaces, Calico CNI, Helm charts, and microservice manifests), run this command in a PowerShell terminal:
@@ -91,6 +117,36 @@ To access the services using host-based routing, map `devops-project.local` to l
 *   **Alertmanager**: Routes alerts based on severity. It includes an **inhibition rule** which silences downstream `GatewayHighLatency` alerts when the root-cause `PaymentsHighErrorRate` is firing.
 *   **Loki & Promtail**: Promtail ships pod logs to Loki. Promtail is configured with a JSON parsing pipeline that extracts `level`, `service`, and `request_id` from structured application logs, promoting them to queryable Loki index labels.
 *   **Grafana**: Pre-wired with Prometheus and Loki data sources to visualize metrics and query logs.
+
+---
+
+## Application Packaging (Helm & Kustomize)
+
+The microservices suite (`gateway`, `orders`, `payments`, `redis`) is packaged into modern Kubernetes delivery formats to demonstrate flexible environment parameterization:
+
+### 1. Unified Helm Chart (`charts/observability-apps`)
+A single, parameterized Helm chart managing all application deployments, services, HPAs, ingress rules, NetworkPolicies, and Prometheus ServiceMonitors.
+*   `values.yaml`: Baseline production configuration with resource reservations, autoscaling, and ingress settings.
+*   `values-local.yaml`: Tuned for the local multi-node Kind cluster (2 gateway replicas, 2 orders replicas, HPA active).
+*   `values-ci.yaml`: Lightweight configuration for ephemeral CI runners (1 replica each, lower memory ceilings).
+
+**Deploy via Helm:**
+```bash
+helm upgrade --install observability-apps ./charts/observability-apps \
+  --namespace app --create-namespace \
+  -f ./charts/observability-apps/values-local.yaml
+```
+
+### 2. Kustomize Overlays (`deploy/kustomize`)
+For environments that prefer native declarative manifests without template engines, Kustomize manages base configurations with environment patches:
+*   `deploy/kustomize/base/`: Canonical Kubernetes deployments, services, ingress, and Calico NetworkPolicies.
+*   `deploy/kustomize/overlays/local/`: Strategic patches for multi-replica local Kind testing.
+*   `deploy/kustomize/overlays/ci/`: Strategic patches applying lower resource requests for CI.
+
+**Deploy via Kustomize:**
+```bash
+kubectl apply -k deploy/kustomize/overlays/local
+```
 
 ---
 

@@ -1,0 +1,51 @@
+# Values for GitHub Actions ephemeral ubuntu-latest runner
+global:
+  imageTag: "ci"
+  imagePullPolicy: "IfNotPresent"
+
+gateway:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "30m"
+      memory: "48Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+
+orders:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "30m"
+      memory: "48Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+  autoscaling:
+    enabled: false
+
+payments:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "30m"
+      memory: "48Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+
+redis:
+  resources:
+    requests:
+      cpu: "30m"
+      memory: "48Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+
+networkPolicies:
+  enabled: true
+
+serviceMonitors:
+  enabled: true

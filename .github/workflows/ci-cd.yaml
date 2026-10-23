@@ -39,6 +39,27 @@ jobs:
       - name: Syntax check
         run: python -m py_compile app/${{ matrix.service }}/main.py
 
+  package-validation:
+    name: Package Validation (Helm & Kustomize)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.2.0
+
+      - name: Lint and render Helm chart
+        run: |
+          helm lint charts/observability-apps
+          helm template observability-apps charts/observability-apps -f charts/observability-apps/values-ci.yaml > /dev/null
+          helm template observability-apps charts/observability-apps -f charts/observability-apps/values-local.yaml > /dev/null
+
+      - name: Validate Kustomize overlays
+        run: |
+          kubectl kustomize deploy/kustomize/base > /dev/null
+          kubectl kustomize deploy/kustomize/overlays/local > /dev/null
+          kubectl kustomize deploy/kustomize/overlays/ci > /dev/null
+
   # ── Full observability stack + alerting assertions ─────────────────────────────
   #
   # Runs on ubuntu-latest (2 vCPU / ~7 GB RAM).  Total scheduled memory requests:
@@ -58,7 +79,7 @@ jobs:
   # disabled in prometheus-values.yaml.tpl to keep footprint low.
   observability:
     name: Observability & Alerting
-    needs: lint
+    needs: [lint, package-validation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

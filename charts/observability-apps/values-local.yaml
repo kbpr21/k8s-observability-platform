@@ -1,0 +1,23 @@
+# Values for local development on kind-multi-node
+global:
+  imageTag: "latest"
+  imagePullPolicy: "IfNotPresent"
+
+gateway:
+  replicas: 2
+
+orders:
+  replicas: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+
+payments:
+  replicas: 1
+
+networkPolicies:
+  enabled: true
+
+serviceMonitors:
+  enabled: true

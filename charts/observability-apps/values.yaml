@@ -1,0 +1,96 @@
+global:
+  imageTag: "latest"
+  imagePullPolicy: "IfNotPresent"
+  namespace: "app"
+
+# 1. Gateway Service (Public Edge / Ingress Target)
+gateway:
+  name: "gateway"
+  replicas: 2
+  image: "gateway"
+  port: 8000
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  env:
+    ORDERS_SERVICE_URL: "http://orders.app.svc.cluster.local:8000/order"
+
+# 2. Orders Service (Middle-tier, writes to Redis, calls Payments)
+orders:
+  name: "orders"
+  replicas: 2
+  image: "orders"
+  port: 8000
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  env:
+    APP_REDIS_HOST: "redis.app.svc.cluster.local"
+    APP_REDIS_PORT: "6379"
+    PAYMENTS_SERVICE_URL: "http://payments.app.svc.cluster.local:8000/charge"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+
+# 3. Payments Service (Downstream, fault-injectable)
+payments:
+  name: "payments"
+  replicas: 1  # Pinned to 1 for deterministic fault injection
+  image: "payments"
+  port: 8000
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+# 4. Redis Cache
+redis:
+  name: "redis"
+  image: "redis:7-alpine"
+  port: 6379
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+
+# 5. Ingress Controller Configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  host: "devops-project.local"
+  tls:
+    secretName: "gateway-tls"
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "5"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "15"
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+# 6. Calico NetworkPolicies (Zero-Trust Namespace & Pod Segmentation)
+networkPolicies:
+  enabled: true
+  monitoringNamespace: "monitoring"
+  ingressNamespace: "ingress"
+
+# 7. Prometheus Operator ServiceMonitors
+serviceMonitors:
+  enabled: true
+  monitoringNamespace: "monitoring"
+  scrapeInterval: "15s"

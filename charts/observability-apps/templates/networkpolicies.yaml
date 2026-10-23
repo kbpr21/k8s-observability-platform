@@ -1,0 +1,124 @@
+{{- if .Values.networkPolicies.enabled }}
+# Payments Network Policy: only accept ingress from orders and monitoring namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: payments-netpol
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.payments.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Values.payments.name }}
+  ingress:
+    # Allow from Orders service pods
+    - from:
+        - podSelector:
+            matchLabels:
+              app: {{ .Values.orders.name }}
+      ports:
+        - port: {{ .Values.payments.port }}
+          protocol: TCP
+    # Allow from Monitoring namespace (Prometheus scraping)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.monitoringNamespace }}
+      ports:
+        - port: {{ .Values.payments.port }}
+          protocol: TCP
+  policyTypes:
+    - Ingress
+---
+# Orders Network Policy: accept ingress from gateway and monitoring namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orders-netpol
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.orders.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Values.orders.name }}
+  ingress:
+    # Allow from Gateway pods
+    - from:
+        - podSelector:
+            matchLabels:
+              app: {{ .Values.gateway.name }}
+      ports:
+        - port: {{ .Values.orders.port }}
+          protocol: TCP
+    # Allow from Monitoring namespace (Prometheus scraping)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.monitoringNamespace }}
+      ports:
+        - port: {{ .Values.orders.port }}
+          protocol: TCP
+  policyTypes:
+    - Ingress
+---
+# Redis Network Policy: accept ingress only from orders pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-netpol
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.redis.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Values.redis.name }}
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: {{ .Values.orders.name }}
+      ports:
+        - port: {{ .Values.redis.port }}
+          protocol: TCP
+  policyTypes:
+    - Ingress
+---
+# Gateway Network Policy: accept ingress from ingress controller namespace and monitoring namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-netpol
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.gateway.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Values.gateway.name }}
+  ingress:
+    # Allow from Ingress controller namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.ingressNamespace }}
+      ports:
+        - port: {{ .Values.gateway.port }}
+          protocol: TCP
+    # Allow from Monitoring namespace (Prometheus scraping)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.monitoringNamespace }}
+      ports:
+        - port: {{ .Values.gateway.port }}
+          protocol: TCP
+  policyTypes:
+    - Ingress
+{{- end }}

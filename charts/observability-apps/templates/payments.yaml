@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.payments.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.payments.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.payments.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.payments.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.payments.name }}
+        {{- include "observability-apps.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: {{ .Values.payments.name }}
+          image: "{{ .Values.payments.image }}:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: web
+              containerPort: {{ .Values.payments.port }}
+          resources:
+            {{- toYaml .Values.payments.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.payments.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.payments.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.payments.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.payments.name }}
+    {{- include "observability-apps.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .Values.payments.name }}
+  ports:
+    - name: web
+      port: {{ .Values.payments.port }}
+      targetPort: {{ .Values.payments.port }}
