@@ -150,6 +150,30 @@ kubectl apply -k deploy/kustomize/overlays/local
 
 ---
 
+## Cloud Security & Workload Hardening
+
+Security is integrated directly into the infrastructure and workload definitions across multiple defense layers:
+
+### 1. Kubernetes Pod Security Standards (Restricted Profile)
+The `app` namespace enforces native Kubernetes **Restricted Pod Security Standards (PSS)** via admission control labels:
+*   `pod-security.kubernetes.io/enforce: restricted`
+*   `pod-security.kubernetes.io/audit: restricted`
+*   `pod-security.kubernetes.io/warn: restricted`
+Any pod attempting to run with elevated privileges, host namespaces, or insecure volumes is automatically rejected at admission time.
+
+### 2. Runtime & Container Hardening
+*   **Non-Root Execution:** Multi-stage Dockerfiles create and drop privileges to a dedicated non-root system user (`UID/GID 10001:10001`). All workloads enforce `runAsNonRoot: true` and `runAsUser: 10001` (Redis uses UID `999`).
+*   **Immutability:** Containers enforce `readOnlyRootFilesystem: true` with ephemeral `emptyDir` mounts strictly limited to `/tmp` (and `/data` for Redis cache state).
+*   **Capability Drops & Privilege Boundary:** Every pod sets `allowPrivilegeEscalation: false` and drops all Linux kernel capabilities (`capabilities: { drop: ["ALL"] }`).
+*   **Seccomp Profile:** Workloads require `seccompProfile: { type: "RuntimeDefault" }` to block unauthorized system calls.
+
+### 3. Lateral Movement & Identity Protection
+*   **Disabled ServiceAccount Token Mounting:** Pods configure `automountServiceAccountToken: false`. Compromised workloads cannot read cluster API tokens to query or compromise the Kubernetes control plane.
+*   **Zero-Trust Network Segmentation:** Strict Calico `NetworkPolicy` resources enforce least-privilege service-to-service communication (`gateway` $\to$ `orders` $\to$ `payments`). Direct traffic from the public edge to `payments` or `redis` is denied at the data plane.
+*   **Perimeter Protection:** TLS termination on NGINX Ingress with custom CA, automated HTTPS redirection, and client rate-limiting (`limit-rps: 50`).
+
+---
+
 ## Incident Walkthrough
 
 This walkthrough demonstrates a complete operability loop: detecting a fault, routing the alert, and tracing it through metrics and logs.

@@ -9,6 +9,7 @@ labels:
       app.kubernetes.io/part-of: k8s-observability-platform
 
 resources:
+  - namespace.yaml
   - gateway.yaml
   - orders.yaml
   - payments.yaml

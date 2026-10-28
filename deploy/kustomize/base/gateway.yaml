@@ -15,10 +15,26 @@ spec:
       labels:
         app: gateway
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: gateway
           image: gateway:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop:
+                - ALL
           ports:
             - name: web
               containerPort: 8000
@@ -29,6 +45,9 @@ spec:
             limits:
               cpu: 200m
               memory: 256Mi
+          volumeMounts:
+            - name: tmp-volume
+              mountPath: /tmp
           livenessProbe:
             httpGet:
               path: /health
@@ -41,6 +60,9 @@ spec:
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 10
+      volumes:
+        - name: tmp-volume
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

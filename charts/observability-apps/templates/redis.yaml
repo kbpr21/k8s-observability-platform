@@ -17,14 +17,29 @@ spec:
         app: {{ .Values.redis.name }}
         {{- include "observability-apps.labels" . | nindent 8 }}
     spec:
+      automountServiceAccountToken: {{ .Values.security.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.redis.podSecurityContext | nindent 8 }}
       containers:
         - name: {{ .Values.redis.name }}
           image: {{ .Values.redis.image }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- toYaml .Values.redis.containerSecurityContext | nindent 12 }}
           ports:
             - containerPort: {{ .Values.redis.port }}
           resources:
             {{- toYaml .Values.redis.resources | nindent 12 }}
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+            - name: tmp-volume
+              mountPath: /tmp
+      volumes:
+        - name: redis-data
+          emptyDir: {}
+        - name: tmp-volume
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

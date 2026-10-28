@@ -93,12 +93,50 @@ resource "kubernetes_deployment_v1" "redis" {
       }
 
       spec {
+        automount_service_account_token = false
+
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 999
+          run_as_group    = 999
+          fs_group        = 999
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
+
         container {
           name  = "redis"
           image = "redis:7-alpine"
           port {
             container_port = 6379
           }
+          security_context {
+            allow_privilege_escalation = false
+            read_only_root_filesystem  = true
+            run_as_non_root            = true
+            run_as_user                = 999
+            capabilities {
+              drop = ["ALL"]
+            }
+          }
+          volume_mount {
+            name       = "redis-data"
+            mount_path = "/data"
+          }
+          volume_mount {
+            name       = "tmp-volume"
+            mount_path = "/tmp"
+          }
+        }
+
+        volume {
+          name = "redis-data"
+          empty_dir {}
+        }
+        volume {
+          name = "tmp-volume"
+          empty_dir {}
         }
       }
     }
@@ -149,6 +187,18 @@ resource "kubernetes_deployment_v1" "payments" {
       }
 
       spec {
+        automount_service_account_token = false
+
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 10001
+          run_as_group    = 10001
+          fs_group        = 10001
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
+
         container {
           name  = "payments"
           image = "payments:${var.image_tag}"
@@ -156,6 +206,19 @@ resource "kubernetes_deployment_v1" "payments" {
           port {
             name           = "web"
             container_port = 8000
+          }
+          security_context {
+            allow_privilege_escalation = false
+            read_only_root_filesystem  = true
+            run_as_non_root            = true
+            run_as_user                = 10001
+            capabilities {
+              drop = ["ALL"]
+            }
+          }
+          volume_mount {
+            name       = "tmp-volume"
+            mount_path = "/tmp"
           }
           liveness_probe {
             http_get {
@@ -173,6 +236,11 @@ resource "kubernetes_deployment_v1" "payments" {
             initial_delay_seconds = 5
             period_seconds        = 10
           }
+        }
+
+        volume {
+          name = "tmp-volume"
+          empty_dir {}
         }
       }
     }
@@ -227,6 +295,18 @@ resource "kubernetes_deployment_v1" "orders" {
       }
 
       spec {
+        automount_service_account_token = false
+
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 10001
+          run_as_group    = 10001
+          fs_group        = 10001
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
+
         container {
           name  = "orders"
           image = "orders:${var.image_tag}"
@@ -234,6 +314,19 @@ resource "kubernetes_deployment_v1" "orders" {
           port {
             name           = "web"
             container_port = 8000
+          }
+          security_context {
+            allow_privilege_escalation = false
+            read_only_root_filesystem  = true
+            run_as_non_root            = true
+            run_as_user                = 10001
+            capabilities {
+              drop = ["ALL"]
+            }
+          }
+          volume_mount {
+            name       = "tmp-volume"
+            mount_path = "/tmp"
           }
           env {
             name  = "APP_REDIS_HOST"
@@ -273,6 +366,11 @@ resource "kubernetes_deployment_v1" "orders" {
             initial_delay_seconds = 5
             period_seconds        = 10
           }
+        }
+
+        volume {
+          name = "tmp-volume"
+          empty_dir {}
         }
       }
     }
@@ -327,6 +425,18 @@ resource "kubernetes_deployment_v1" "gateway" {
       }
 
       spec {
+        automount_service_account_token = false
+
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 10001
+          run_as_group    = 10001
+          fs_group        = 10001
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
+
         container {
           name  = "gateway"
           image = "gateway:${var.image_tag}"
@@ -334,6 +444,19 @@ resource "kubernetes_deployment_v1" "gateway" {
           port {
             name           = "web"
             container_port = 8000
+          }
+          security_context {
+            allow_privilege_escalation = false
+            read_only_root_filesystem  = true
+            run_as_non_root            = true
+            run_as_user                = 10001
+            capabilities {
+              drop = ["ALL"]
+            }
+          }
+          volume_mount {
+            name       = "tmp-volume"
+            mount_path = "/tmp"
           }
           resources {
             requests = {
@@ -361,6 +484,11 @@ resource "kubernetes_deployment_v1" "gateway" {
             initial_delay_seconds = 5
             period_seconds        = 10
           }
+        }
+
+        volume {
+          name = "tmp-volume"
+          empty_dir {}
         }
       }
     }

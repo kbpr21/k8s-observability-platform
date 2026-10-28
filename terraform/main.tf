@@ -2,6 +2,14 @@
 resource "kubernetes_namespace" "app" {
   metadata {
     name = "app"
+    labels = {
+      "pod-security.kubernetes.io/enforce"         = "restricted"
+      "pod-security.kubernetes.io/enforce-version" = "latest"
+      "pod-security.kubernetes.io/warn"            = "restricted"
+      "pod-security.kubernetes.io/warn-version"   = "latest"
+      "pod-security.kubernetes.io/audit"           = "restricted"
+      "pod-security.kubernetes.io/audit-version"   = "latest"
+    }
   }
 }
 

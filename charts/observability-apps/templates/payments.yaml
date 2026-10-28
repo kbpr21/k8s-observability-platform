@@ -17,15 +17,23 @@ spec:
         app: {{ .Values.payments.name }}
         {{- include "observability-apps.labels" . | nindent 8 }}
     spec:
+      automountServiceAccountToken: {{ .Values.security.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.security.podSecurityContext | nindent 8 }}
       containers:
         - name: {{ .Values.payments.name }}
           image: "{{ .Values.payments.image }}:{{ .Values.global.imageTag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- toYaml .Values.security.containerSecurityContext | nindent 12 }}
           ports:
             - name: web
               containerPort: {{ .Values.payments.port }}
           resources:
             {{- toYaml .Values.payments.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp-volume
+              mountPath: /tmp
           livenessProbe:
             httpGet:
               path: /health
@@ -38,6 +46,9 @@ spec:
               port: {{ .Values.payments.port }}
             initialDelaySeconds: 5
             periodSeconds: 10
+      volumes:
+        - name: tmp-volume
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

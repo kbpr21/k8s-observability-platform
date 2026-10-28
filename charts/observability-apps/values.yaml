@@ -68,6 +68,21 @@ redis:
     limits:
       cpu: "100m"
       memory: "128Mi"
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 999
+    capabilities:
+      drop:
+        - ALL
 
 # 5. Ingress Controller Configuration
 ingress:
@@ -94,3 +109,22 @@ serviceMonitors:
   enabled: true
   monitoringNamespace: "monitoring"
   scrapeInterval: "15s"
+
+# 8. Pod Security Standards (Restricted Profile) & SecurityContext
+security:
+  automountServiceAccountToken: false
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 10001
+    capabilities:
+      drop:
+        - ALL
